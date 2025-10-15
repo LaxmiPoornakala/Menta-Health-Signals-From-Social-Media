@@ -1,0 +1,254 @@
+---
+title: "DPA Project Datasets Sanity Check"
+author: "Kadhiravan Gopal"
+date: "2025-10-30"
+output:
+  pdf_document:
+    latex_engine: xelatex
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Dreaddit sanity:
+
+```{r}
+library(data.table)
+
+df <- fread("Data/dreaddit-test.csv")
+table(df$label)
+head(df$text, 5)
+
+```
+
+## Quick model:
+
+```{r}
+library(caret)
+model <- train(as.factor(label) ~ ., data=df[ , -c("text")], method="glm")
+confusionMatrix(model)
+```
+
+#Tweet test (10k rows)
+
+```{r}
+library(readxl)
+tweets <- read_excel("Data/Mendeley/Tweet_Contents.xlsx", n_max = 10000)
+tweets$text <- tolower(tweets$Tweet)
+```
+
+## Run NRC sentiment:
+
+```{r}
+library(syuzhet)
+tweets$sentiment <- get_sentiment(tweets$text)
+```
+
+## Observe distribution:
+```{r}
+summary(tweets$sentiment)
+```
+```{r}
+library(data.table)
+
+students <- fread("Data/Students Social Media Addiction.csv")
+
+```
+
+## 🔍 Quick sanity check before correlation
+
+Always inspect your data first:
+```{r}
+head(students)
+str(students)
+summary(students)
+```
+## And check missing values:
+
+```{r}
+sum(is.na(students$Avg_Daily_Usage_Hours))
+sum(is.na(students$Mental_Health_Score))
+```
+```{r}
+library(ggplot2)
+
+ggplot(students, aes(x = Avg_Daily_Usage_Hours, y = Mental_Health_Score)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(title = "Social Media Usage vs Mental Health Score",
+       x = "Avg Daily Usage (Hours)",
+       y = "Mental Health Score (1–10)")
+```
+
+
+
+## Survey sanity check
+```{r}
+cor.test(students$Avg_Daily_Usage_Hours, students$Mental_Health_Score)
+```
+# Dreaddit stress model | Train 1 baseline classifier
+
+## 1. Load Dreaddit (stress dataset)
+
+File you said: Data/dreaddit-test.csv
+
+```{r}
+library(data.table)
+library(dplyr)
+
+dreaddit <- fread("Data/dreaddit-test.csv")
+
+# Check data
+dim(dreaddit)
+str(dreaddit)
+table(dreaddit$label)
+```
+
+## 🧹 2. Remove columns not usable directly in baseline
+
+We avoid text at this step — use only engineered LIWC features.
+
+```{r}
+dreaddit_clean <- dreaddit %>%
+  select(-text, -subreddit, -post_id, -sentence_range) %>% 
+  mutate(label = factor(label))
+```
+
+## 🧪 3. Train/Test Split
+
+```{r}
+set.seed(123)
+
+train_idx <- sample(1:nrow(dreaddit_clean), 0.8 * nrow(dreaddit_clean))
+train <- dreaddit_clean[train_idx, ]
+test  <- dreaddit_clean[-train_idx, ]
+```
+
+## 🤖 4. Train Logistic Regression (baseline model)
+
+We train on all LIWC features automatically:
+
+```{r}
+library(caret)
+
+model <- train(
+  label ~ ., 
+  data = train,
+  method = "glm",
+  family = "binomial"
+)
+```
+
+## 📊 5. Evaluation
+Predictions
+```{r}
+pred <- predict(model, newdata = test)
+```
+
+## Confusion Matrix
+
+```{r}
+confusionMatrix(pred, test$label)
+```
+## ROC-AUC
+
+```{r}
+library(pROC)
+
+prob <- predict(model, newdata = test, type = "prob")[,2]
+roc_curve <- roc(test$label, prob)
+auc(roc_curve)
+```
+🧠 6. Feature Importance (psycholinguistic markers):
+
+```{r}
+importance <- varImp(model)
+print(importance)
+plot(importance, top = 20)
+```
+
+```{r}
+install.packages(c("tidyverse", "data.table", "stringr", "textclean", "tm"))
+```
+
+✅ Step 2: Read a sample of tweets
+
+(We will sample 10k to start — Mendeley has ~548k)
+
+```{r}
+library(readxl)
+
+tweets <- read_excel("Data/Mendeley/Tweet_Contents.xlsx")  # modify path if needed
+tweets <- as.data.table(tweets)
+# Sample the data table using the correct sample size
+tweets <- tweets[sample(.N, sample_size)]
+
+# Check the dimensions of the new tweets object
+dim(tweets)
+
+
+tweets <- tweets[sample(.N, 10000)]  # Random 10k rows
+colnames(tweets) <- c("tweet")   # rename if needed
+head(tweets)
+```
+
+```{r}
+library(textclean)
+library(tm)
+library(stringr)
+
+clean_tweet <- function(text) {
+  text %>%
+    tolower() %>%                                         # lowercase
+    replace_url() %>%                                     # remove URLs
+    str_replace_all("@[A-Za-z0-9_]+", "") %>%             # remove mentions
+    str_replace_all("#[A-Za-z0-9_]+", "") %>%             # remove hashtags
+    replace_emoji("") %>%                                 # remove emojis
+    replace_html() %>%                                    # remove HTML entities
+    str_replace_all("[^a-zA-Z\\s]", " ") %>%              # remove non-text
+    removeNumbers() %>%                                   # remove numbers
+    removePunctuation() %>%                               # remove punctuation
+    removeWords(stopwords("en")) %>%                      # remove stopwords
+    stripWhitespace()                                     # trim spaces
+}
+```
+
+
+
+```{r}
+library(textclean)
+library(tm)
+library(stringr)
+
+clean_tweet <- function(text) {
+  text %>%
+    tolower() %>%                                                   # lowercase
+    replace_url() %>%                                               # remove URLs
+    str_replace_all("@[A-Za-z0-9_]+", "") %>%                       # remove mentions
+    str_replace_all("#[A-Za-z0-9_]+", "") %>%                       # remove hashtags
+    
+    # FIX: Use stringr::str_replace_all() to remove emojis 
+    # This pattern targets most standard emoji blocks for removal
+    # (The original textclean::replace_emoji() was the source of the error)
+    str_replace_all(., "[^\\p{L}\\p{N}\\s\\p{P}]+", "") %>% 
+    
+    replace_html() %>%                                              # remove HTML entities
+    str_replace_all("[^a-zA-Z\\s]", " ") %>%                        # remove non-text (already handled by the fix, but kept for redundancy)
+    removeNumbers() %>%                                             # remove numbers
+    removePunctuation() %>%                                         # remove punctuation
+    removeWords(stopwords("en")) %>%                                # remove stopwords
+    stripWhitespace()                                               # trim spaces
+}
+
+# Then run your cleaning step again
+tweets$clean_text <- sapply(tweets$tweet, clean_tweet)
+head(tweets$clean_text)
+```
+## Cleaned Tweets Data :
+```{r}
+library(dplyr)
+
+sample_n(data.frame(raw = tweets$tweet, clean = tweets$clean_text), 10)
+```
+
