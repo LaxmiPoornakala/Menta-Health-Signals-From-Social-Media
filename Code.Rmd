@@ -1,0 +1,859 @@
+---
+title: 'Social Media & Mental Health: Modelling & Behavioral Validation'
+author: "Echoes of the Mind Team"
+date: "2025-11-28"
+output:
+  html_document:
+    toc: true
+    number_sections: true
+  pdf_document:
+    toc: true
+---
+
+```{r}
+setwd("Data")
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = TRUE, warning = TRUE)
+
+# Core libraries
+library(data.table)
+library(readxl)
+library(tidyverse)
+library(caret)
+library(pROC)
+library(textclean)
+library(tm)
+library(stringr)
+library(syuzhet)
+library(purrr)
+library(kernlab)
+library(xgboost)
+library(naivebayes)
+
+# Optional ML backends (for SVM, XGBoost, Naive Bayes)
+has_kernlab  <- requireNamespace("kernlab",    quietly = TRUE)
+has_xgboost  <- requireNamespace("xgboost",    quietly = TRUE)
+has_nb       <- requireNamespace("naivebayes", quietly = TRUE)
+
+# Consistent plotting theme used throughout
+theme_project <- function() {
+theme_minimal(base_size = 13) +
+theme(
+plot.title = element_text(face = "bold", hjust = 0.5),
+axis.title.x = element_text(face = "bold"),
+axis.title.y = element_text(face = "bold"),
+panel.grid.minor = element_blank()
+)
+}
+
+```
+
+```{r}
+# Load Dreaddit test data
+
+dreaddit <- fread("Data/dreaddit-test.csv")
+
+# Drop raw text / IDs, keep LIWC and lexical features + label
+leak_cols <- c("id", "post_id", "sentence_range", "text", "subreddit")
+leak_cols_present <- intersect(names(dreaddit), leak_cols)
+dreaddit_model <- dreaddit %>%
+select(-all_of(leak_cols_present)) %>%
+  mutate(label = factor(label, levels = c(0,1), labels = c("no_stress","stress")))
+
+
+str(dreaddit_model$label)
+table(dreaddit_model$label)
+dim(dreaddit_model)
+
+
+# Train/test split
+# Identify predictor columns (exclude label)
+pred_cols <- setdiff(names(dreaddit_model), "label")
+na_counts <- sapply(select(dreaddit_model, all_of(pred_cols)), \(x) sum(is.na(x)))
+na_summary <- tibble(variable = names(na_counts), n_na = as.integer(na_counts)) %>%
+arrange(desc(n_na))
+na_summary %>% print(n = 20)
+
+# Use caret to remove near-zero variance predictors (based on training set only)
+
+set.seed(123)
+train_idx <- createDataPartition(dreaddit_model$label, p = 0.8, list = FALSE)
+train_raw <- dreaddit_model[train_idx, ]
+test_raw <- dreaddit_model[-train_idx, ]
+
+# Identify near zero var on train
+
+nzv <- nearZeroVar(train_raw %>% select(-label), saveMetrics = TRUE)
+keep_cols <- rownames(nzv)[!nzv$nzv] # columns to keep
+
+# Always keep label
+
+train <- train_raw %>% select(all_of(keep_cols), label)
+test <- test_raw %>% select(all_of(keep_cols), label)
+
+# Preprocess: median impute (if any NAs), center & scale
+
+preproc <- preProcess(train %>% select(-label), method = c("medianImpute", "center", "scale"))
+train_pp <- predict(preproc, train %>% select(-label))
+test_pp <- predict(preproc, test %>% select(-label))
+
+train_d <- bind_cols(train_pp, label = train$label)
+test_d <- bind_cols(test_pp, label = test$label)
+
+# Confirm sizes
+
+dim(train_d); dim(test_d)
+
+```
+
+```{r}
+ctrl <- trainControl(
+method          = "repeatedcv",
+number          = 5,
+repeats         = 3,
+classProbs      = TRUE,
+summaryFunction = twoClassSummary,
+savePredictions = TRUE,
+sampling        = "smote"  # optional: helps with small/imbalanced datasets; remove if undesired
+)
+
+
+```
+
+#### Train GLM baseline (with metrics)
+```{r}
+set.seed(123)
+model_glm <- train(
+label ~ .,
+data = train_d,
+method = "glm",
+family = "binomial",
+metric = "ROC",
+trControl = ctrl
+)
+
+pred_glm_prob <- predict(model_glm, newdata = test_d, type = "prob")[, "stress"]
+pred_glm_class <- predict(model_glm, newdata = test_d)
+
+cm_glm <- confusionMatrix(pred_glm_class, test_d$label, positive = "stress")
+
+roc_glm <- roc(
+response = test_d$label,
+predictor = pred_glm_prob,
+levels = c("no_stress", "stress"),
+direction = "<"
+)
+auc_glm <- auc(roc_glm)
+
+cat("\n=== GLM Metrics (Dreaddit) ===\n")
+print(cm_glm)
+cat("AUC (GLM):", round(auc_glm, 4), "\n")
+
+```
+
+```{r}
+ggplot(data.frame(
+fpr = 1 - roc_glm$specificities,
+tpr = roc_glm$sensitivities
+), aes(x = fpr, y = tpr)) +
+geom_line() +
+geom_abline(linetype = "dashed") +
+labs(
+title = "ROC Curve - GLM (Dreaddit)",
+x = "False Positive Rate",
+y = "True Positive Rate"
+) +
+theme_project()
+
+```
+
+```{r}
+set.seed(123)
+model_rf <- train(
+label ~ .,
+data      = train_d,
+method    = "rf",
+metric    = "ROC",
+trControl = ctrl,
+ntree     = 500
+)
+
+pred_rf_prob  <- predict(model_rf, newdata = test_d, type = "prob")[, "stress"]
+pred_rf_class <- predict(model_rf, newdata = test_d)
+
+cm_rf  <- confusionMatrix(pred_rf_class, test_d$label, positive = "stress")
+roc_rf <- roc(test_d$label, pred_rf_prob, levels = c("no_stress", "stress"))
+auc_rf <- auc(roc_rf)
+
+cat("\n=== Random Forest Metrics (Dreaddit) ===\n")
+print(cm_rf)
+cat("AUC (RF):", round(auc_rf, 4), "\n")
+
+```
+
+```{r}
+if (has_kernlab) {
+set.seed(123)
+
+# small grid to reduce runtime
+
+svm_grid <- expand.grid(C = c(0.25, 1), sigma = c(0.01, 0.05))
+model_svm <- train(
+label ~ .,
+data     = train_d,
+method   = "svmRadial",
+metric   = "ROC",
+trControl= ctrl,
+tuneGrid = svm_grid
+)
+pred_svm_prob  <- predict(model_svm, newdata = test_d, type = "prob")[, "stress"]
+pred_svm_class <- predict(model_svm, newdata = test_d)
+cm_svm  <- confusionMatrix(pred_svm_class, test_d$label, positive = "stress")
+roc_svm <- roc(test_d$label, pred_svm_prob, levels = c("no_stress","stress"))
+auc_svm <- auc(roc_svm)
+cat("\n=== SVM Metrics (Dreaddit) ===\n"); print(cm_svm); cat("AUC (SVM):", round(auc_svm,4), "\n")
+} else {
+message("[kernlab not available] Skipping SVM.")
+}
+
+```
+
+```{r}
+if (has_xgboost) {
+
+# small tune grid for speed
+
+xgb_grid <- expand.grid(
+nrounds = c(100),
+max_depth = c(3,5),
+eta = c(0.05, 0.1),
+gamma = 0,
+colsample_bytree = c(0.7),
+min_child_weight = 1,
+subsample = 0.8
+)
+set.seed(123)
+model_xgb <- train(
+label ~ .,
+data = train_d,
+method = "xgbTree",
+metric = "ROC",
+trControl = ctrl,
+tuneGrid = xgb_grid
+)
+pred_xgb_prob  <- predict(model_xgb, newdata = test_d, type = "prob")[, "stress"]
+pred_xgb_class <- predict(model_xgb, newdata = test_d)
+cm_xgb  <- confusionMatrix(pred_xgb_class, test_d$label, positive = "stress")
+roc_xgb <- roc(test_d$label, pred_xgb_prob, levels = c("no_stress","stress"))
+auc_xgb <- auc(roc_xgb)
+cat("\n=== XGBoost Metrics (Dreaddit) ===\n"); print(cm_xgb); cat("AUC (XGBoost):", round(auc_xgb,4), "\n")
+} else {
+message("[xgboost not available] Skipping XGBoost.")
+}
+```
+
+```{r}
+# ======================
+# Initialize model_results BEFORE NB, SVM, XGB append
+# ======================
+
+model_results <- data.frame(
+  Model = c("GLM", "Random Forest"),
+  Accuracy = c(
+    cm_glm$overall["Accuracy"],
+    cm_rf$overall["Accuracy"]
+  ),
+  F1 = c(
+    cm_glm$byClass["F1"],
+    cm_rf$byClass["F1"]
+  ),
+  AUC = c(
+    auc_glm,
+    auc_rf
+  ),
+  stringsAsFactors = FALSE
+)
+
+# Add SVM if trained
+if (exists("cm_svm")) {
+  model_results <- rbind(
+    model_results,
+    data.frame(
+      Model="SVM",
+      Accuracy=cm_svm$overall["Accuracy"],
+      F1=cm_svm$byClass["F1"],
+      AUC=auc_svm
+    )
+  )
+}
+
+# Add XGBoost if trained
+if (exists("cm_xgb")) {
+  model_results <- rbind(
+    model_results,
+    data.frame(
+      Model="XGBoost",
+      Accuracy=cm_xgb$overall["Accuracy"],
+      F1=cm_xgb$byClass["F1"],
+      AUC=auc_xgb
+    )
+  )
+}
+
+```
+
+```{r}
+# ============================
+# 6.6 Naive Bayes (NEW)
+# ============================
+
+# Install + Load NB package
+if (!has_nb) {
+install.packages("naivebayes")
+has_nb <- requireNamespace("naivebayes", quietly = TRUE)
+}
+if (has_nb) {
+set.seed(123)
+model_nb <- train(
+label ~ .,
+data = train_d,
+method = "naive_bayes",
+metric = "ROC",
+trControl = ctrl
+)
+pred_nb_prob  <- predict(model_nb, newdata = test_d, type = "prob")[, "stress"]
+pred_nb_class <- predict(model_nb, newdata = test_d)
+cm_nb  <- confusionMatrix(pred_nb_class, test_d$label, positive = "stress")
+roc_nb <- roc(test_d$label, pred_nb_prob, levels = c("no_stress","stress"))
+auc_nb <- auc(roc_nb)
+cat("\n=== Naive Bayes Metrics (Dreaddit) ===\n"); print(cm_nb); cat("AUC (Naive Bayes):", round(auc_nb,4), "\n")
+} else {
+message("[naivebayes not available] Skipping Naive Bayes.")
+}
+
+```
+
+```{r}
+# ======================
+# Ensure model_results exists
+# ======================
+model_results <- data.frame(
+  Model = c("GLM", "Random Forest", 
+            if (exists("model_svm")) "SVM" else NULL,
+            if (exists("model_xgb")) "XGBoost" else NULL,
+            if (exists("model_nb")) "Naive Bayes" else NULL),
+
+  Accuracy = c(
+    cm_glm$overall["Accuracy"],
+    cm_rf$overall["Accuracy"],
+    if (exists("cm_svm")) cm_svm$overall["Accuracy"] else NULL,
+    if (exists("cm_xgb")) cm_xgb$overall["Accuracy"] else NULL,
+    if (exists("cm_nb"))  cm_nb$overall["Accuracy"]  else NULL
+  ),
+
+  F1 = c(
+    cm_glm$byClass["F1"],
+    cm_rf$byClass["F1"],
+    if (exists("cm_svm")) cm_svm$byClass["F1"] else NULL,
+    if (exists("cm_xgb")) cm_xgb$byClass["F1"] else NULL,
+    if (exists("cm_nb"))  cm_nb$byClass["F1"]  else NULL
+  ),
+
+  AUC = c(
+    auc_glm,
+    auc_rf,
+    if (exists("auc_svm")) auc_svm else NULL,
+    if (exists("auc_xgb")) auc_xgb else NULL,
+    if (exists("auc_nb"))  auc_nb  else NULL
+  )
+)
+
+```
+
+```{r}
+# Base ROC list
+
+roc_list <- list(
+GLM   = roc_glm,
+RF    = roc_rf
+)
+
+if (exists("roc_svm")) roc_list[["SVM"]]    <- roc_svm
+if (exists("roc_xgb")) roc_list[["XGBoost"]] <- roc_xgb
+if (exists("roc_nb"))  roc_list[["Naive Bayes"]] <- roc_nb
+
+# Plot first ROC, then add others
+
+cols <- c("GLM" = "blue", "RF" = "red", "SVM" = "purple",
+"XGBoost" = "darkgreen", "Naive Bayes" = "orange")
+
+first_name <- names(roc_list)[1]
+plot(roc_list[[first_name]],
+col = cols[first_name],
+lwd = 2,
+main = "ROC Comparison: GLM vs RF vs SVM vs XGBoost vs NB")
+
+if (length(roc_list) > 1) {
+for (nm in names(roc_list)[-1]) {
+plot(roc_list[[nm]], col = cols[nm], lwd = 2, add = TRUE)
+}
+}
+
+legend(
+"bottomright",
+legend = paste0(
+names(roc_list),
+" AUC = ",
+sapply(roc_list, function(r) round(auc(r), 3))
+),
+col = cols[names(roc_list)],
+lwd = 2
+)
+
+```
+
+```{r}
+# Safely extract metrics (NA when model not trained)
+
+get_acc <- function(cm) if (!missing(cm)) cm$overall["Accuracy"] else NA
+get_f1  <- function(cm) if (!missing(cm)) cm$byClass["F1"]       else NA
+
+acc_svm <- if (exists("cm_svm")) get_acc(cm_svm) else NA
+acc_xgb <- if (exists("cm_xgb")) get_acc(cm_xgb) else NA
+acc_nb  <- if (exists("cm_nb"))  get_acc(cm_nb)  else NA
+
+f1_svm  <- if (exists("cm_svm")) get_f1(cm_svm)  else NA
+f1_xgb  <- if (exists("cm_xgb")) get_f1(cm_xgb)  else NA
+f1_nb   <- if (exists("cm_nb"))  get_f1(cm_nb)   else NA
+
+auc_svm_val <- if (exists("roc_svm"))  auc(roc_svm)  else NA
+auc_xgb_val <- if (exists("roc_xgb"))  auc(roc_xgb)  else NA
+auc_nb_val  <- if (exists("roc_nb"))   auc(roc_nb)   else NA
+
+model_results <- tibble(
+Model    = c("GLM", "Random Forest", "SVM", "XGBoost", "Naive Bayes"),
+Accuracy = c(cm_glm$overall["Accuracy"],
+cm_rf$overall["Accuracy"],
+acc_svm,
+acc_xgb,
+acc_nb),
+F1       = c(cm_glm$byClass["F1"],
+cm_rf$byClass["F1"],
+f1_svm,
+f1_xgb,
+f1_nb),
+AUC      = c(auc_glm,
+auc_rf,
+auc_svm_val,
+auc_xgb_val,
+auc_nb_val)
+)
+
+model_results
+
+```
+
+```{r}
+ggplot(model_results, aes(x = Model, y = AUC, fill = Model)) +
+geom_col() +
+geom_text(aes(label = round(AUC, 3)), vjust = -0.5) +
+labs(
+title = "Model AUC Comparison (Dreaddit)",
+x = "Model",
+y = "AUC"
+) +
+theme_project() +
+theme(legend.position = "none")
+
+```
+
+```{r}
+imp_glm <- varImp(model_glm)
+plot(imp_glm, top = 20, main = "Top 20 Features – GLM (Dreaddit)")
+
+```
+
+```{r}
+imp_rf <- varImp(model_rf)
+plot(imp_rf, top = 20, main = "Top 20 Features – Random Forest (Dreaddit)")
+
+```
+
+```{r}
+mend_tweets <- read_excel("Data/Mendeley/Tweet_Contents.xlsx")
+mend_nodes  <- read_excel("Data/Mendeley/Nodes_Data.xlsx")
+mend_edges  <- read_excel("Data/Mendeley/Edges_Data.xlsx")
+
+# Ensure tweet column
+
+if ("Tweet" %in% names(mend_tweets)) mend_tweets <- mend_tweets %>% rename(tweet = Tweet)
+
+# Sample safely (no undefined 'sample_size')
+
+set.seed(123)
+mend_sample <- if (nrow(mend_tweets) > 10000) mend_tweets %>% slice_sample(n = 10000) else mend_tweets
+
+# Cleaning function (robust unicode-aware)
+
+clean_tweet <- function(text) {
+text %>%
+as.character() %>%
+tolower() %>%
+replace_url() %>%
+str_replace_all("@[A-Za-z0-9_]+", "") %>%
+str_replace_all("#[A-Za-z0-9_]+", "") %>%
+str_replace_all("[^\\p{L}\\p{N}\\s]", " ") %>% # remove non-letters/numbers
+replace_html() %>%
+removeNumbers() %>%
+removePunctuation() %>%
+stripWhitespace()
+}
+
+mend_sample <- mend_sample %>%
+mutate(clean_text = map_chr(tweet, ~ clean_tweet(.x)))
+head(mend_sample$clean_text, 5)
+
+
+```
+
+```{r}
+# Syuzhet sentiment
+
+mend_sample$syuzhet_sentiment <- get_sentiment(mend_sample$clean_text)
+nrc_df <- get_nrc_sentiment(mend_sample$clean_text)
+mend_nrc <- bind_cols(mend_sample, nrc_df)
+
+# create stress-like indicator
+
+mend_nrc <- mend_nrc %>%
+mutate(
+stress_score = sadness + fear + anger + disgust,
+positive_score = joy + trust + anticipation + surprise,
+stress_flag = ifelse(stress_score > positive_score & stress_score > 0, 1, 0)
+)
+
+cat("Proportion of stress-like tweets (sample):", mean(mend_nrc$stress_flag), "\n")
+summary(mend_nrc$syuzhet_sentiment)
+
+
+```
+
+```{r}
+# Histogram of sentiment
+
+ggplot(mend_nrc, aes(x = syuzhet_sentiment)) +
+geom_histogram(bins = 40) +
+labs(
+title = "Sentiment Distribution (Mendeley Tweets)",
+x = "Syuzhet sentiment score",
+y = "Count"
+) +
+theme_project()
+
+
+```
+
+```{r}
+# Histogram of stress_score
+
+ggplot(mend_nrc, aes(x = stress_score)) +
+geom_histogram(bins = 40) +
+labs(
+title = "Stress Score Distribution (NRC negative emotions)",
+x = "Stress score (sad + fear + anger + disgust)",
+y = "Count"
+) +
+theme_project()
+
+```
+
+```{r}
+# Stress score vs sentiment
+
+ggplot(mend_nrc, aes(x = stress_score, y = syuzhet_sentiment)) +
+geom_point(alpha = 0.2) +
+geom_smooth(method = "lm") +
+labs(
+title = "Stress Score vs Overall Sentiment (Mendeley Tweets)",
+x = "Stress score",
+y = "Syuzhet sentiment"
+) +
+theme_project()
+
+```
+
+```{r}
+students <- fread("Data/Students Social Media Addiction.csv")
+
+str(students)
+summary(students)
+
+```
+
+```{r}
+cor_students <- cor.test(
+students$Avg_Daily_Usage_Hours,
+students$Mental_Health_Score
+)
+cor_students
+
+```
+
+```{r}
+ggplot(students,
+aes(x = Avg_Daily_Usage_Hours,
+y = Mental_Health_Score)) +
+geom_point(alpha = 0.6) +
+geom_smooth(method = "lm") +
+labs(
+title = "Usage vs Mental Health Score (Students Dataset)",
+x = "Average daily usage (hours)",
+y = "Mental Health Score (1–10)"
+) +
+theme_project()
+
+```
+
+```{r}
+model_students <- lm(
+Mental_Health_Score ~ Avg_Daily_Usage_Hours +
+Sleep_Hours_Per_Night +
+Conflicts_Over_Social_Media +
+Addicted_Score,
+data = students
+)
+
+summary(model_students)
+
+```
+
+```{r}
+students$mh_fitted <- fitted(model_students)
+
+ggplot(students,
+aes(x = Mental_Health_Score, y = mh_fitted)) +
+geom_point(alpha = 0.6) +
+geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+labs(
+title = "Observed vs Fitted Mental Health Score (Students)",
+x = "Observed MH score",
+y = "Fitted MH score"
+) +
+theme_project()
+
+```
+
+```{r}
+bhavik <- fread("Data/Bhavik_Mental_Health_Dataset.csv")
+
+bhavik_mod <- bhavik %>%
+mutate(
+treatment_bin = ifelse(treatment == "Yes", 1, 0),
+treatment_bin = factor(treatment_bin,
+levels = c(0, 1),
+labels = c("no_treatment", "treatment")),
+Growing_Stress   = as.factor(Growing_Stress),
+Mood_Swings      = as.factor(Mood_Swings),
+Coping_Struggles = as.factor(Coping_Struggles),
+Social_Weakness  = as.factor(Social_Weakness),
+family_history   = as.factor(family_history)
+)
+
+table(bhavik_mod$treatment_bin)
+
+```
+
+```{r}
+model_bhavik <- glm(
+treatment_bin ~ Growing_Stress + Mood_Swings +
+Coping_Struggles + Social_Weakness + family_history,
+data   = bhavik_mod,
+family = binomial
+)
+
+summary(model_bhavik)
+
+```
+
+```{r}
+or_bhavik <- exp(cbind(OR = coef(model_bhavik),
+confint(model_bhavik)))
+or_bhavik
+
+```
+
+```{r}
+smmh <- fread("Data/smmh.csv")
+str(smmh)
+names(smmh)
+
+```
+
+```{r}
+smmh_model_df <- smmh %>%
+mutate(
+avg_time = case_when(
+grepl("Less than",  `8. What is the average time you spend on social media every day?`) ~ 0.5,
+grepl("Between 1 and 2", `8. What is the average time you spend on social media every day?`) ~ 1.5,
+grepl("Between 2 and 3", `8. What is the average time you spend on social media every day?`) ~ 2.5,
+grepl("Between 3 and 4", `8. What is the average time you spend on social media every day?`) ~ 3.5,
+grepl("Between 4 and 5", `8. What is the average time you spend on social media every day?`) ~ 4.5,
+grepl("More than 5", `8. What is the average time you spend on social media every day?`) ~ 6,
+TRUE ~ NA_real_
+),
+distress_index = rowMeans(
+cbind(
+`9. How often do you find yourself using Social media without a specific purpose?`,
+`10. How often do you get distracted by Social media when you are busy doing something?`,
+`11. Do you feel restless if you haven't used Social media in a while?`,
+`12. On a scale of 1 to 5, how easily distracted are you?`,
+`13. On a scale of 1 to 5, how much are you bothered by worries?`,
+`14. Do you find it difficult to concentrate on things?`,
+`18. How often do you feel depressed or down?`,
+`19. On a scale of 1 to 5, how frequently does your interest in daily activities fluctuate?`,
+`20. On a scale of 1 to 5, how often do you face issues regarding sleep?`
+),
+na.rm = TRUE
+)
+) %>%
+filter(!is.na(avg_time), !is.na(distress_index))
+
+summary(smmh_model_df$distress_index)
+
+```
+
+```{r}
+cor_smmh <- cor.test(
+smmh_model_df$avg_time,
+smmh_model_df$distress_index
+)
+cor_smmh
+
+```
+
+```{r}
+ggplot(smmh_model_df,
+aes(x = avg_time, y = distress_index)) +
+geom_point(alpha = 0.6) +
+geom_smooth(method = "lm") +
+labs(
+title = "Average Social Media Time vs Distress Index (SMMH)",
+x = "Average social media time (coded hours)",
+y = "Distress index (1–5)"
+) +
+theme_project()
+
+```
+
+```{r}
+model_smmh <- lm(distress_index ~ avg_time, data = smmh_model_df)
+summary(model_smmh)
+
+```
+
+```{r}
+cat("\nBehavioral validation (Students, Bhavik, SMMH) completed.\n")
+cat("Full modelling pipeline with GLM, RF, SVM, XGBoost, and Naive Bayes is included.\n")
+
+```
+
+
+```{r}
+# Model Performance Comparison — Dreaddit Dataset
+library(tidyverse)
+
+model_results_long <- model_results %>%
+  select(Model, Accuracy, F1, AUC) %>%
+  pivot_longer(cols = c(Accuracy, F1, AUC), names_to = "Metric", values_to = "Value")
+
+ggplot(model_results_long, aes(x = Model, y = Value, fill = Metric)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  labs(title = "Performance Comparison Across Models (Dreaddit)",
+       y = "Score", x = "Model") +
+  theme_minimal()
+```
+
+```{r}
+# Stress Score Distribution — Twitter Data
+ggplot(mend_nrc, aes(x = stress_score)) +
+  geom_density(fill="steelblue", alpha=0.4) +
+  labs(title = "Density of Stress Scores in Twitter Sample",
+       x = "NRC Stress Score", y = "Density") +
+  theme_minimal()
+```
+
+```{r}
+# Emotion Radar — Stress vs Non-Stress Groups
+library(fmsb)
+library(dplyr)
+
+emotion_means <- mend_nrc %>%
+  mutate(stress_flag = ifelse(stress_flag == 1, "Stressy", "Non-Stressy")) %>%
+  group_by(stress_flag) %>%
+  summarise(
+    anger = mean(anger),
+    fear = mean(fear),
+    sadness = mean(sadness),
+    disgust = mean(disgust),
+    joy = mean(joy),
+    trust = mean(trust)
+  ) %>%
+  column_to_rownames("stress_flag")
+
+# Prepare max/min scale based on observed ranges
+max_vals <- apply(emotion_means, 2, max)
+min_vals <- apply(emotion_means, 2, min)
+
+emotion_radar <- rbind(max_vals, min_vals, emotion_means)
+
+radarchart(
+  emotion_radar,
+  axistype = 1,
+  pcol = c("blue", "red"),
+  pfcol = c(rgb(0,0,1,0.3), rgb(1,0,0,0.3)),
+  plwd = 2,
+  title = "Emotion Profile of Stress vs Non-Stress Tweets"
+)
+
+legend("topright", legend = row.names(emotion_means),
+       col = c("blue", "red"), lwd = 2)
+```
+
+```{r}
+# Behavioral Correlation Heatmap — Student Well-being
+library(reshape2)
+
+num_students <- students %>%
+  select(Avg_Daily_Usage_Hours, Sleep_Hours_Per_Night,
+         Mental_Health_Score, Conflicts_Over_Social_Media, Addicted_Score)
+
+corr <- cor(num_students, use = "complete.obs")
+
+corr_melted <- reshape2::melt(corr)
+
+ggplot(corr_melted, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = sprintf("%.2f", value)), color = "white", size = 3) +
+  scale_fill_gradient2(low = "red", high = "blue", mid = "white", midpoint = 0) +
+  labs(title = "Correlation Heatmap — Student Well-being & Digital Behavior",
+       x = "", y = "") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r}
+# Odds Ratios of Treatment-Seeking Behavior
+or_plot <- as.data.frame(or_bhavik)
+or_plot$Variable <- rownames(or_plot)
+
+ggplot(or_plot[-1,], aes(x=reorder(Variable, OR), y=OR)) +
+  geom_col(fill="darkred") +
+  geom_hline(yintercept=1, linetype="dashed") +
+  coord_flip() +
+  labs(title="Odds Ratios of Treatment Seeking (Bhavik Dataset)",
+       x="Feature", y="Odds Ratio") +
+  theme_minimal()
+```
