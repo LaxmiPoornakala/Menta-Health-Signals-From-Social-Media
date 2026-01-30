@@ -2,94 +2,127 @@
 
 ## Overview
 
-This project analyzes large-scale publicly available social media data to identify linguistic and emotional patterns associated with stress and mental health signals.
+This project analyzes large-scale public social media and survey datasets to identify linguistic and behavioral indicators associated with stress and mental health outcomes.
 
-Using Natural Language Processing (NLP) and statistical modeling techniques, the system processes ~550,000+ social media posts to extract sentiment, emotion, and psycholinguistic features for analytical and predictive modeling.
+Using R-based NLP, statistical modeling, and machine learning techniques, the project combines:
 
-> ⚠️ Note: This project uses publicly available datasets from Mendeley and Kaggle. All data is de-identified and non-clinical. No protected health information (PHI) or medical records were used.
+- Text-based stress detection (Dreaddit dataset)
+- Emotion & sentiment analysis (Mendeley Twitter dataset)
+- Behavioral validation (Students, Bhavik, and SMMH datasets)
 
-## Objective
+> Note: All datasets are publicly available and de-identified research data. No clinical records or protected health information were used.
 
-To detect and analyze stress-related patterns in online text using:
+## Objectives
 
-- Sentiment analysis  
-- Emotion lexicons  
-- Psycholinguistic feature extraction  
-- Statistical correlation and predictive modeling  
+- Detect stress-related patterns in social media text
+- Compare machine learning classifiers for stress prediction
+- Validate findings using independent behavioral datasets
+- Analyze relationships between digital behavior and mental health metrics
 
 ## Data Sources
 
-- Public Reddit / Twitter (X) datasets  
-- Public behavioral survey datasets  
-- Non-clinical, non-identifiable data  
+- Dreaddit stress dataset  
+- Mendeley Twitter dataset  
+- Students Social Media Addiction dataset  
+- Bhavik Mental Health dataset  
+- SMMH (Social Media & Mental Health) dataset  
 
-Total dataset size: **~550,000+ posts**
+Total processed data: ~550,000+ text records + survey datasets
 
 ## Methodology
 
-### 1 Data Processing Pipeline
-- Text cleaning (URLs, punctuation, stopwords removal)
-- Tokenization & lemmatization
-- Normalization
-- Feature scaling
+### 1 Text-Based Stress Classification (Dreaddit)
 
-### 2 Feature Engineering
-- LIWC psycholinguistic features  
-- NRC Emotion Lexicon features  
-- Sentiment polarity scoring  
-- Word frequency-based metrics  
+- Removed raw text leakage columns
+- Applied preprocessing (imputation, scaling, NZV filtering)
+- Performed train/test split (80/20)
+- Used SMOTE for class balancing
+- Compared multiple classifiers:
 
-### 3 Exploratory Data Analysis (EDA)
-- Stress vs non-stress distribution analysis  
-- Emotional intensity comparisons  
-- Correlation analysis (R² ≈ 0.89 in experiments)  
-- Trend visualization  
+  - Logistic Regression (GLM)
+  - Random Forest
+  - SVM (Radial)
+  - XGBoost
+  - Naive Bayes
 
-### 4 Modeling & Evaluation
-- Regression analysis  
-- Binary classification (stress vs non-stress)  
 - Evaluation metrics:
-  - Accuracy  
-  - Precision  
-  - Recall  
-  - F1-score  
+  - Accuracy
+  - F1 Score
+  - AUC
+  - ROC curves
+  - Confusion matrices
+  - Feature importance
 
-## Key Insights
+### 2 Emotion & Sentiment Analysis (Twitter Data)
 
-- Strong correlation between stress signals and negative emotional language.
-- Certain linguistic markers consistently predicted elevated stress likelihood.
-- Emotion-based features significantly improved predictive performance.
-- Sentiment polarity effectively differentiated stress and non-stress groups.
+- Cleaned tweets (URLs, mentions, punctuation removal)
+- Applied NRC emotion lexicon via `syuzhet`
+- Computed:
+  - Stress score (sadness + fear + anger + disgust)
+  - Positive score (joy + trust + anticipation + surprise)
+- Generated:
+  - Sentiment distribution plots
+  - Stress score histograms
+  - Stress vs sentiment regression analysis
+  - Emotion radar charts (Stress vs Non-Stress)
+
+### 3 Behavioral Validation (Survey Datasets)
+
+#### Students Dataset
+- Correlation: social media usage vs mental health score
+- Linear regression modeling
+- Observed vs fitted validation plots
+- Correlation heatmap
+
+#### Bhavik Dataset
+- Logistic regression on treatment-seeking behavior
+- Odds ratio estimation with confidence intervals
+
+#### SMMH Dataset
+- Created composite distress index
+- Correlation: time spent vs distress index
+- Regression modeling
+
+## Key Findings
+
+- Stress-related language strongly correlates with negative emotion intensity.
+- Ensemble models (RF, XGBoost) outperformed baseline GLM.
+- Increased social media usage correlates with reduced mental health scores.
+- Emotional distress indicators significantly predict treatment-seeking behavior.
+- Behavioral survey results align with text-based stress detection findings.
 
 ## Tech Stack
 
-- Python  
-- Pandas  
-- NumPy  
-- scikit-learn  
-- Matplotlib / Seaborn  
-- NLTK / spaCy  
-- LIWC & NRC Emotion Lexicons  
+- R
+- data.table
+- tidyverse
+- caret
+- pROC
+- tm
+- syuzhet
+- xgboost
+- kernlab (SVM)
+- naivebayes
+- ggplot2
+- fmsb (radar charts)
 
 ## How to Run
 
-1. Install dependencies:
-```bash
-pip install pandas numpy scikit-learn matplotlib seaborn nltk spacy
-```
-
-2. Download required NLP models:
-```bash
-python -m nltk.downloader all
-```
-
-3. Run the Jupyter notebooks to reproduce analysis and modeling.
+1. Install required packages in R.
+2. Place datasets inside `/Data` directory.
+3. Run the R Markdown / script file sequentially.
 
 ## Skills Demonstrated
 
-- Large-scale unstructured data processing
-- NLP preprocessing pipelines
+- NLP preprocessing in R
+- Emotion lexicon analysis
 - Feature engineering
-- Statistical analysis & correlation modeling
-- Predictive modeling
-- Data visualization & storytelling
+- Model comparison & evaluation
+- SMOTE handling for imbalanced data
+- Statistical modeling (linear & logistic regression)
+- Behavioral data validation
+- Advanced data visualization
+
+## License
+
+Academic / Research Project
