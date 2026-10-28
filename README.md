@@ -2,7 +2,7 @@
 
 ## Overview
 
-This project analyzes large-scale public social media and survey datasets to identify linguistic and behavioral indicators associated with stress and mental health outcomes.
+This project analyzes multiple social media and survey datasets to identify linguistic and behavioral indicators associated with stress and mental health outcomes.
 
 Using R-based NLP, statistical modeling, and machine learning techniques, the project combines:
 
@@ -27,13 +27,13 @@ Using R-based NLP, statistical modeling, and machine learning techniques, the pr
 - Bhavik Mental Health dataset  
 - SMMH (Social Media & Mental Health) dataset  
 
-Total processed data: ~550,000+ text records + survey datasets
+Total processed data: The project analyzed up to 10,000 tweets, along with separate datasets to predict stress and study the relationship between social media use and mental health..
 
 ## Methodology
 
 ### 1 Text-Based Stress Classification (Dreaddit)
 
-- Removed raw text leakage columns
+- Excluded identifiers and raw text, retaining structured features for classification.
 - Applied preprocessing (imputation, scaling, NZV filtering)
 - Performed train/test split (80/20)
 - Used SMOTE for class balancing
@@ -66,7 +66,7 @@ Total processed data: ~550,000+ text records + survey datasets
   - Stress vs sentiment regression analysis
   - Emotion radar charts (Stress vs Non-Stress)
 
-### 3 Behavioral Validation (Survey Datasets)
+### 3 Cross-dataset behavioral analysis
 
 #### Students Dataset
 - Correlation: social media usage vs mental health score
@@ -85,11 +85,12 @@ Total processed data: ~550,000+ text records + survey datasets
 
 ## Key Findings
 
-- Stress-related language strongly correlates with negative emotion intensity.
-- Ensemble models (RF, XGBoost) outperformed baseline GLM.
-- Increased social media usage correlates with reduced mental health scores.
-- Emotional distress indicators significantly predict treatment-seeking behavior.
-- Behavioral survey results align with text-based stress detection findings.
+- Compared multiple machine learning classifiers for stress-related classification using structured features from the Dreaddit dataset.
+- Examined sentiment and emotion patterns in Twitter text using Syuzhet and the NRC emotion lexicon.
+- Identified a strong negative association between average daily social media usage and mental health scores in the Students dataset.
+- Used logistic regression to examine factors associated with treatment-seeking behavior.
+- Constructed a survey-based distress index to investigate its relationship with estimated daily social media usage.
+- Visualized model performance, sentiment distributions, emotional patterns, and behavioral relationships.
 
 ## Tech Stack
 
@@ -118,10 +119,10 @@ Total processed data: ~550,000+ text records + survey datasets
 - Emotion lexicon analysis
 - Feature engineering
 - Model comparison & evaluation
-- SMOTE handling for imbalanced data
+- SMOTE for training data
 - Statistical modeling (linear & logistic regression)
 - Behavioral data validation
-- Advanced data visualization
+- Data visualization with ggplot2 and fmsb.
 
 ## License
 
